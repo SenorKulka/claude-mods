@@ -1,0 +1,13 @@
+{
+  "name": "bushi-local",
+  "owner": {
+    "name": "Bushi"
+  },
+  "plugins": [
+    {
+      "name": "keepwarm-bg",
+      "source": "./plugins/keepwarm-bg",
+      "description": "Keeps the prompt cache warm while the session waits on background work"
+    }
+  ]
+}
