@@ -112,12 +112,13 @@ export function fmtTokens(n: number): string {
 function show($: EngineInterface, s: State, text: string | undefined) {
   s.shown = text
   if (s.hasBand) $.ui.invalidate('ui.render')
-  else $.ui.status(text === undefined ? undefined : `keepwarm-bg · ${text}`)
+  // The status line already carries the plugin's name.
+  else $.ui.status(text)
 }
 
-/** Pings have stopped while work may still be in flight: say so where it stays, and raise a notification. */
-async function stopped($: EngineInterface, s: State, now: number, why: string) {
-  show($, s, `pings stopped at ${clockTime(now)}: ${why}`)
+/** Pings have stopped while work may still be in flight: a short line where it stays, the whole reason in a notification. */
+async function stopped($: EngineInterface, s: State, now: number, short: string, why: string) {
+  show($, s, `pings stopped ${clockTime(now)}: ${short}`)
   const text = `Pings stopped at ${clockTime(now)}: ${why}. A wake-up after an hour idle will re-write the cache.`
   try {
     if ((await $.ui.notify(text, { title: 'keepwarm-bg' })).isSent) return
@@ -168,28 +169,28 @@ async function ping($: EngineInterface, s: State, gen: number) {
     if (s.gen !== gen) return
     s.lastRequestAt = now
     const at = schedule($, s, now)
-    return show($, s, at === null ? undefined : `cache-tax's /keepwarm is pinging · checking again at ${clockTime(at)}`)
+    return show($, s, at === null ? undefined : `cache-tax is pinging · recheck ${clockTime(at)}`)
   }
   let reply
   try {
     reply = await $.model.fork({ prompt: PING_PROMPT })
   } catch (err) {
-    if (s.gen === gen) await stopped($, s, now, `the ping failed (${err instanceof Error ? err.message : String(err)})`)
+    if (s.gen === gen) await stopped($, s, now, 'ping failed', `the ping failed (${err instanceof Error ? err.message : String(err)})`)
     return
   }
   // A turn, /clear or compaction while the ping was out decides what comes next.
   if (s.gen !== gen) return
   // Older Claude Code releases returned null instead of a failure object.
-  if (!reply?.isAnswered) return stopped($, s, now, `the ping got no reply (${reply ? reply.reason : 'none sent'})`)
+  if (!reply?.isAnswered) return stopped($, s, now, 'no reply', `the ping got no reply (${reply ? reply.reason : 'none sent'})`)
   const read = fmtTokens(reply.usage.cache_read_input_tokens)
   if (!isWarm(reply.usage)) {
-    return stopped($, s, now, `the ping read ${read} and wrote ${fmtTokens(reply.usage.cache_creation_input_tokens)} tokens, so the cache was already gone`)
+    return stopped($, s, now, 'cache was cold', `the ping read ${read} and wrote ${fmtTokens(reply.usage.cache_creation_input_tokens)} tokens, so the cache was already gone`)
   }
   s.lastRequestAt = now
   $.ui.toast(`Cache refreshed: the ping read ${read} tokens.`)
   const at = schedule($, s, now)
-  if (at === null) return stopped($, s, now, `that was the last ping (read ${read}), 12 h after the last turn`)
-  show($, s, `cache refreshed at ${clockTime(now)} (read ${read}) · next ping at ${clockTime(at)}`)
+  if (at === null) return stopped($, s, now, '12 h cap', `that was the last ping (read ${read}), 12 h after the last turn`)
+  show($, s, `refreshed ${clockTime(now)} (${read}) · next ${clockTime(at)}`)
 }
 
 export async function onTurnEnd($: EngineInterface, s: State, tasks: readonly Summary[]) {
@@ -201,7 +202,7 @@ export async function onTurnEnd($: EngineInterface, s: State, tasks: readonly Su
     return show($, s, undefined)
   }
   const at = schedule($, s, now)
-  show($, s, at === null ? undefined : `waiting on background work · cache ping at ${clockTime(at)}`)
+  show($, s, at === null ? undefined : `cache ping at ${clockTime(at)}`)
 }
 
 export const register: Register = on => {

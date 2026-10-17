@@ -4,7 +4,7 @@ Bushi's home-made Claude Code mods, as a directory marketplace named `bushi-loca
 
 ## Mods
 
-- `keepwarm-bg`: keeps the prompt cache warm while a session waits on background work (shells, subagents, monitors, workflows). It sends a cache-reading fork 50 idle minutes after a turn that leaves work in flight, then every 50 minutes, for at most 12 hours after the last turn. It runs no slash commands and leaves nothing in the transcript: the countdown and the last ping show in a row above the prompt (the status line on other surfaces), each refresh in a toast, and pings stopping while work may still be in flight (the 12-hour cap, a cold or failed ping) in a notification. It also adds a sub-agent wait rule to your `CLAUDE.md`, described below.
+- `keepwarm-bg`: keeps the prompt cache warm while a session waits on background work (shells, subagents, monitors, workflows). It sends a cache-reading fork 50 idle minutes after a turn that leaves work in flight, then every 50 minutes, for at most 12 hours after the last turn. It runs no slash commands and leaves nothing in the transcript: the countdown and the last ping show in the status line under the prompt (in the Desktop Code tab, for one) or a row above the prompt in the terminal, each refresh in a toast, and pings stopping while work may still be in flight (the 12-hour cap, a cold or failed ping) in a notification. It also adds a sub-agent wait rule to your `CLAUDE.md`, described below.
 
 ## keepwarm-bg: the sub-agent wait rule in CLAUDE.md
 
