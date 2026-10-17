@@ -4,7 +4,24 @@ Bushi's home-made Claude Code mods, as a directory marketplace named `bushi-loca
 
 ## Mods
 
-- `keepwarm-bg`: keeps the prompt cache warm while a session waits on background work (shells, subagents, monitors, workflows). It sends a cache-reading fork 50 idle minutes after a turn that leaves work in flight, then every 50 minutes, for at most 12 hours after the last turn. It runs no slash commands and leaves nothing in the transcript: the countdown and the last ping show in the status line under the prompt (in the Desktop Code tab, for one) or a row above the prompt in the terminal, each refresh in a toast, and pings stopping while work may still be in flight (the 12-hour cap, a cold or failed ping) in a notification. It also adds a sub-agent wait rule to your `CLAUDE.md`, described below.
+- `keepwarm-bg`: keeps the main conversation's one-hour prompt cache warm and prices it when it goes cold. Since 3.0.0 it does everything cache-tax 2.2.1 did, so uninstall cache-tax (it warns at session start while both are installed). Details below; it also adds a sub-agent wait rule to your `CLAUDE.md`, described after that.
+
+## keepwarm-bg: what it does
+
+**Pings.** A ping is a tool-less fork of the conversation that reads the cache and so renews it, sent 50 idle minutes after the last request, then every 50 minutes. Pings run while either reason holds:
+
+- **Background work:** a turn ended with a shell, subagent, monitor or workflow still in flight. Pings run until a turn leaves no work, for at most 12 hours after the last turn.
+- **A `/keepwarm` window:** `/keepwarm` (6 hours), `/keepwarm 90m`, `/keepwarm always` (a 6-hour window at every session start), `/keepwarm off`. A paid cold write opens a 3-hour window by itself.
+
+Both reasons share one timer, so the cache is never pinged twice. A ping that finds the cache already gone, or fails, stops the pings until the next turn.
+
+**Guard.** A message sent after the cache went cold (over an hour idle, context of 50k tokens or more) is refused once with its re-write price; sending it again pays it. `/keepwarm guard warn` only shows the price.
+
+**Prices.** List prices from the [pricing page](https://platform.claude.com/docs/en/about-claude/pricing) on 17 October 2026, per model (Opus 5.5 at $8 per million for a 1-hour write and $0.20 for a read, Haiku 5.5 by prompt length). A turn counts as a cold write only when it wrote more than its context grew by, so a long turn that adds a lot of context is not mistaken for one.
+
+**Where it shows.** Nothing goes to the transcript except the cold-write line. A row above the prompt (the status line where there is no such row) shows warm or cold, the time left, the next ping as a countdown redrawn every minute, and the last ping's read and price. Each ping shows in a toast, and pings stopping early in a longer toast. `/keepwarm status` shows the model, cache state, context, cold price, break-even, background work and this session's cold writes.
+
+Windows are kept per session in the mod's own store. Windows armed under cache-tax are not carried over.
 
 ## keepwarm-bg: the sub-agent wait rule in CLAUDE.md
 

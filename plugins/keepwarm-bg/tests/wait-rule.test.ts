@@ -1,4 +1,4 @@
-import { expect, test, tier } from 'claude-code/testing'
+import { expect, mock, test, tier } from 'claude-code/testing'
 
 import { RULE_END, RULE_OFF, RULE_START, WAIT_RULE, withWaitRule } from '../hooks/register'
 
@@ -42,9 +42,16 @@ test('session start writes the rule into CLAUDE.md under the config dir', async 
   on('fs.read', ($, e) => ({ value: files[e.path] }))
   on('fs.write', ($, e) => { files[e.path] = e.text; return { value: undefined } })
   on('session.start', ($, e) => ({ cwd: e.cwd }))
-  await $.session.start({ cwd: '/w', surface: 'desktop', isInteractive: true })
+  // The rest of session start: the window store, the session and the /keepwarm command.
+  mock.store(on, {})
+  on('session.id', () => ({ value: 'S1' }))
+  on('session.usage', () => ({ value: { startedAt: 0, context: { window: 1000000, tokens: undefined }, rateLimits: [] } }))
+  on('command.register', ($, e) => ({ value: { command: e.name } }))
+  on('command.list', () => ({ value: [] }))
+  on('ui.status', () => ({ value: undefined }))
+  await $.session.start({ cwd: '/w', surface: null, isInteractive: false })
   expect(files['/cfg/CLAUDE.md']).toBe(withWaitRule(CODEGRAPH))
   const written = files['/cfg/CLAUDE.md']
-  await $.session.start({ cwd: '/w', surface: 'desktop', isInteractive: true })
+  await $.session.start({ cwd: '/w', surface: null, isInteractive: false })
   expect(files['/cfg/CLAUDE.md']).toBe(written)
 })

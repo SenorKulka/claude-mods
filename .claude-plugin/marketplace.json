@@ -7,7 +7,7 @@
     {
       "name": "keepwarm-bg",
       "source": "./plugins/keepwarm-bg",
-      "description": "Keeps the prompt cache warm while the session waits on background work"
+      "description": "Keeps the prompt cache warm while background work runs or a /keepwarm window is open, and prices cold writes (absorbs cache-tax)"
     }
   ]
 }
