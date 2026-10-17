@@ -1,4 +1,4 @@
-import type { EngineInterface, Register } from 'claude-code'
+import type { EngineInterface, Register, SessionRateLimit } from 'claude-code'
 import { statusIcons } from './status-icons'
 
 // Keeps the main conversation's one-hour prompt cache warm and prices it when
@@ -9,11 +9,11 @@ import { statusIcons } from './status-icons'
 // - background work: a turn ended with a shell, subagent, monitor or workflow
 //   still in flight, which will wake the session later. Pings then run until a
 //   turn leaves no work, for at most 12 hours after the last turn.
-// - a /keepwarm window: a time the user picked (6 hours by default, `always` for
+// - a /hug-cache window: a time the user picked (6 hours by default, `always` for
 //   every session), or 3 hours after a cold write was paid.
 //
 // A message sent on a cold cache is refused once with its re-write price (or
-// only warned about, with /keepwarm guard warn). Nothing goes to the
+// only warned about, with /hug-cache guard warn). Nothing goes to the
 // transcript: the state shows in a row above the prompt (the status line where
 // there is no such row), each ping in a toast, and pings stopping early in a
 // longer toast.
@@ -50,7 +50,7 @@ const RULE_HEADING = '## Waiting in sub-agents (4-minute slices)'
 export const WAIT_RULE = `${RULE_START}
 ${RULE_HEADING}
 
-A sub-agent's prompt cache lasts 5 minutes; one idle tool call longer than that makes it rewrite its whole cache when it wakes (measured 17 Oct 2026: 600–700k-token caches rewritten 16 times in one session; see the keepwarm-bg README). So:
+A sub-agent's prompt cache lasts 5 minutes; one idle tool call longer than that makes it rewrite its whole cache when it wakes (measured 17 Oct 2026: 600–700k-token caches rewritten 16 times in one session; see the cache-hugger README). So:
 
 - **If you are a sub-agent** and wait on a background job (a review trial, a check run, a test suite, a build, a server), wait in slices of at most 4 minutes: a Bash or Monitor wait with a timeout of at most 240 s, then a short status check, then the next slice. Never make one long blocking wait.
 - **If you launch sub-agents** (Agent tool, workflows), put this rule in every prompt for one that may wait on a background job.
@@ -90,7 +90,7 @@ async function ensureWaitRule($: EngineInterface) {
     const next = withWaitRule(text)
     if (next !== null) await $.fs.write(path, next)
   } catch (err) {
-    $.ui.log(`keepwarm-bg: could not update CLAUDE.md with the sub-agent wait rule: ${err instanceof Error ? err.message : String(err)}`, { to: 'debug' })
+    $.ui.log(`cache-hugger: could not update CLAUDE.md with the sub-agent wait rule: ${err instanceof Error ? err.message : String(err)}`, { to: 'debug' })
   }
 }
 
@@ -138,11 +138,13 @@ type Usage = { input_tokens: number; output_tokens: number; cache_read_input_tok
 export type State = {
   hasBand: boolean
   sid: string
-  /** When the /keepwarm window ends; 0 when none is open. */
+  /** When the /hug-cache window ends; 0 when none is open. */
   deadline: number
   /** When pings for background work stop (12 h after the turn that left it); 0 when the last turn left none. */
   bgUntil: number
   every: number
+  /** The window was opened by the mod (always, or after a cold write), not by /hug-cache. */
+  auto: boolean
   always: boolean
   lastRequestAt: number
   lastModel: string | null
@@ -223,13 +225,26 @@ function endOf(s: State): number {
   return Math.max(s.deadline, s.bgUntil)
 }
 
-function guardText(s: State, now: number): string {
+/** The 5-hour window's use, as the last API response reported it; null off a subscription. */
+async function fiveHour($: EngineInterface): Promise<SessionRateLimit | null> {
+  try {
+    return (await $.session.usage()).rateLimits.find(r => r.kind === 'five_hour') ?? null
+  } catch {
+    return null
+  }
+}
+
+/** The cold-cache notice: a heading, then the price and the 5-hour limit as aligned key-value rows. */
+export function guardText(s: State, now: number, limit: SessionRateLimit | null): string {
   const price = priceOf(s.lastModel, s.ctx)
-  const rate = price ? `$${price[1]}/MTok` : 'the cache-write rate'
+  const rate = price ? `$${price[1]}/MTok` : 'write rate'
   const warm = warmUsd(s)
-  return `the prompt cache went cold ${fmtDuration(now - s.lastRequestAt - TTL_MS)} ago. Sending this re-writes ` +
-    `up to ${s.ctx.toLocaleString('en-US')} tokens at ${rate} = ${fmtUsd(coldUsd(s))}` +
-    (warm == null ? '' : ` (a warm turn would have cost ${fmtUsd(warm)})`) + '.'
+  const reset = limit?.resetsAt ? Date.parse(limit.resetsAt) : NaN
+  return [
+    `Cache cold for ${fmtDuration(now - s.lastRequestAt - TTL_MS)}`,
+    `  re-write   ${fmtUsd(coldUsd(s))}  (${fmtTokens(s.ctx)} tok × ${rate}${warm == null ? '' : `; warm turn ${fmtUsd(warm)}`})`,
+    `  5h limit   ${limit ? `${limit.percentUsed}% used${Number.isNaN(reset) ? '' : `, resets ${clockTime(reset)}`}` : 'n/a'}`,
+  ].join('\n')
 }
 
 export type ResumeFields = {
@@ -266,16 +281,16 @@ export function seedFromResume(s: State, e: ResumeFields, now: number): string |
 }
 
 function statusText(s: State, now: number): string | undefined {
-  if (s.stopped) return `keepwarm stopped: ${s.stopped}`
+  if (s.stopped) return `pings stopped: ${s.stopped}`
   const end = endOf(s)
   if (!end) return undefined
-  const why = s.bgUntil > s.deadline ? ' for background work' : ''
+  const why = s.bgUntil > s.deadline ? 'auto bg' : s.auto ? 'auto' : 'manual'
   const pingText = s.last ? ` · last ping read ${fmtTokens(s.last.read)} ${fmtUsd(s.last.usd)}` : ''
   const nextText = !s.lastRequestAt ? ' · waiting for the first turn'
     : s.compacted ? ' · waiting for the first turn after compaction'
     : isCold(s, now) ? ` · cold now, first ping ${fmtDuration(s.every)} after the next turn`
     : ` · ping in ${fmtDuration(s.lastRequestAt + s.every - now)}`
-  return `keepwarm ${fmtDuration(end - now)} left${why}${nextText}${pingText}`
+  return `cache hugging ${fmtDuration(end - now)} left (${why})${nextText}${pingText}`
 }
 
 function updateStatus($: EngineInterface, s: State, now: number) {
@@ -410,13 +425,14 @@ async function ping($: EngineInterface, s: State) {
 
 /** The reply to an arming command; on a cold cache it says when the first ping can come. */
 function armedText(s: State, now: number, windowMs: number): string {
-  if (isCold(s, now)) return `keepwarm on for ${fmtDuration(windowMs)}. The cache is cold now, so the first ping comes ${fmtDuration(s.every)} after the next turn`
-  return `keepwarm on for ${fmtDuration(windowMs)}, a ping ${fmtDuration(s.every)} after each idle stretch keeps the cache read, not re-written`
+  if (isCold(s, now)) return `Hugging the cache to keep it warm for ${fmtDuration(windowMs)}. It is cold now, so the first ping comes ${fmtDuration(s.every)} after the next turn`
+  return `Hugging the cache to keep it warm for ${fmtDuration(windowMs)}: a ping ${fmtDuration(s.every)} into each idle stretch reads it instead of re-writing it`
 }
 
-async function startWindow($: EngineInterface, s: State, windowMs: number, every: number) {
+async function startWindow($: EngineInterface, s: State, windowMs: number, every: number, auto = false) {
   const now = await $.clock.now()
   s.every = every
+  s.auto = auto
   if (every === PING_AFTER_MS) await $.store.delete(everyKey(s))
   else await $.store.set(everyKey(s), every)
   s.deadline = now + windowMs
@@ -435,12 +451,12 @@ function card(s: State, now: number): string {
   lines.push(`context     ${s.ctx.toLocaleString('en-US')} tokens`)
   lines.push(`cold cost   ${fmtUsd(coldUsd(s))} to re-write it (warm turn ${fmtUsd(warmUsd(s))})`)
   const always = s.always ? ' (always)' : ''
-  const idle = s.always ? 'off until the next session start, which arms 6h00m (always)' : 'off (/keepwarm to arm it for 6h00m)'
-  lines.push(`keepwarm    ${endOf(s) ? (statusText(s, now) ?? '').replace(/^keepwarm /, 'on, ') + always : s.stopped ? `stopped, ${s.stopped}${always}` : idle}`)
+  const idle = s.always ? 'off until the next session start, which arms 6h00m (always)' : 'off (/hug-cache to arm it for 6h00m)'
+  lines.push(`hugging     ${endOf(s) ? (statusText(s, now) ?? '').replace(/^cache hugging /, 'on, ') + always : s.stopped ? `stopped, ${s.stopped}${always}` : idle}`)
   lines.push(`background  ${s.bgUntil ? `work in flight, pings until ${clockTime(s.bgUntil)} at the latest` : 'no work in flight at the last turn'}`)
   const pings = breakEvenPings(s)
   if (pings != null) lines.push(`break-even  up to ${pings} pings at the read rate cost one cold write, about ${fmtDuration(pings * s.every)} of idle at one ping per ${fmtDuration(s.every)}`)
-  lines.push(`guard       ${s.guard === 'refuse' ? 'refuse once (/keepwarm guard warn to only show the price)' : 'warn only (/keepwarm guard refuse to be stopped once)'}`)
+  lines.push(`guard       ${s.guard === 'refuse' ? 'refuse once (/hug-cache guard warn to only show the price)' : 'warn only (/hug-cache guard refuse to be stopped once)'}`)
   const paid = s.misses.reduce((a, m) => a + (m.usd ?? 0), 0)
   lines.push(`session     ${s.misses.length} cold write${s.misses.length === 1 ? '' : 's'} paid, ${fmtUsd(paid)}`)
   return lines.join('\n')
@@ -448,7 +464,7 @@ function card(s: State, now: number): string {
 
 export function freshState(): State {
   return {
-    hasBand: false, sid: '', deadline: 0, bgUntil: 0, every: PING_AFTER_MS, always: false, lastRequestAt: 0, lastModel: null, ctx: 0, compacted: false,
+    hasBand: false, sid: '', deadline: 0, bgUntil: 0, every: PING_AFTER_MS, auto: false, always: false, lastRequestAt: 0, lastModel: null, ctx: 0, compacted: false,
     guard: 'refuse', ackedAt: 0, coldWritePending: false, misses: [], pending: null, tick: null, last: null, stopped: null,
   }
 }
@@ -479,16 +495,16 @@ export const register: Register = on => {
     const asset = statusIcons[light ? 'light' : 'dark'][state === 'warm' || state === 'cold' ? state : 'neutral']
     const icon = noColor ? Text({ bold: true, children: ['[>]'] })
       : e.surface === 'terminal' ? $.ui.resolve(e).Image({ source: { png: asset.png }, columns: 3, rows: 1, alt: '[>]' })
-      : e.surface === 'desktop' ? $.ui.resolve(e).Svg({ source: asset.svg, width: 18, height: 18, alt: 'keepwarm-bg' })
+      : e.surface === 'desktop' ? $.ui.resolve(e).Svg({ source: asset.svg, width: 18, height: 18, alt: 'cache-hugger' })
       : Text({ color, bold: true, children: ['[>]'] })
     return Box({ flexDirection: 'column', children: [
       rest,
       Box({ flexDirection: 'row', alignItems: 'center', children: [
         Box({ flexShrink: 0, children: [icon] }),
         Text({ children: [
-          ' keepwarm-bg · ',
+          ' ',
           Text({ color, bold: true, children: [state] }),
-          ` · ${text.replace(/^keepwarm /, '')}`,
+          ` · ${text}`,
         ] }),
       ] }),
     ] })
@@ -515,19 +531,19 @@ export const register: Register = on => {
     s.guard = savedGuard === 'warn' ? 'warn' : 'refuse'
     s.always = (await $.store.get(KEY_ALWAYS)) === true
     // Always means a fresh default window every session, whatever the last one left behind.
-    if (s.always) await startWindow($, s, DEFAULT_WINDOW_MS, PING_AFTER_MS)
+    if (s.always) await startWindow($, s, DEFAULT_WINDOW_MS, PING_AFTER_MS, true)
     const usage = await $.session.usage()
     if (usage.context.tokens) s.ctx = usage.context.tokens
     await $.command.register({
-      name: 'keepwarm',
-      description: 'Keep the prompt cache warm: bare for 6h, a window such as 90m, always, off, status (cache state and cold price), or guard warn|refuse (keepwarm-bg)',
+      name: 'hug-cache',
+      description: 'Hug the prompt cache to keep it warm: bare for 6h, a window such as 90m, always, off, status (cache state and cold price), or guard warn|refuse (cache-hugger)',
       argumentHint: '[6h | always | off | status | guard warn | guard refuse]',
       immediate: true,
     })
     // cache-tax, which this mod replaces, would ping and guard a second time.
     const commands = await $.command.list()
     if (commands.some(c => c.name === 'cache-tax' || c.name === 'cache-tax:status')) {
-      $.ui.log('cache-tax is also installed, so the cache is pinged and a cold send is guarded twice. keepwarm-bg does all of its work; uninstall cache-tax.')
+      $.ui.log('cache-tax is also installed, so the cache is pinged and a cold send is guarded twice. cache-hugger does all of its work; uninstall cache-tax.')
     }
     updateStatus($, s, now)
     return r
@@ -553,17 +569,17 @@ export const register: Register = on => {
     return r
   })
 
-  on('command.run', { command: 'keepwarm' }, async ($, e) => {
+  on('command.run', { command: 'hug-cache' }, async ($, e) => {
     const words = String(e.args ?? '').trim().split(/\s+/).filter(Boolean)
     const now = await $.clock.now()
     if (words[0] === 'off') {
       const wasAlways = s.always
       await stop($, s, null, true)
-      return { text: wasAlways ? 'keepwarm is off, and no longer arms itself at session start' : 'keepwarm is off' }
+      return { text: wasAlways ? 'Stopped hugging the cache, and no longer starting at session start' : 'Stopped hugging the cache' }
     }
     if (words[0] === 'status') return { text: card(s, now) }
     if (words[0] === 'guard') {
-      if (words[1] !== 'warn' && words[1] !== 'refuse') return { text: '/keepwarm guard takes warn or refuse' }
+      if (words[1] !== 'warn' && words[1] !== 'refuse') return { text: '/hug-cache guard takes warn or refuse' }
       s.guard = words[1]
       await $.store.set(KEY_GUARD, s.guard)
       return { text: s.guard === 'refuse' ? 'guard set to refuse once: a cold send is dropped with its price, the resend goes through' : 'guard set to warn: a cold send goes through with its price shown' }
@@ -573,14 +589,14 @@ export const register: Register = on => {
       await $.store.set(KEY_ALWAYS, true)
       await startWindow($, s, DEFAULT_WINDOW_MS, PING_AFTER_MS)
       const cold = isCold(s, now) ? `. The cache is cold now, so the first ping comes ${fmtDuration(s.every)} after the next turn` : ''
-      return { text: `keepwarm always on: every session starts with a ${fmtDuration(DEFAULT_WINDOW_MS)} window; /keepwarm off turns it off for good${cold}` }
+      return { text: `Hugging the cache to keep it warm, always: every session starts with a ${fmtDuration(DEFAULT_WINDOW_MS)} hug; /hug-cache off turns it off for good${cold}` }
     }
     if (!words.length) {
       await startWindow($, s, DEFAULT_WINDOW_MS, PING_AFTER_MS)
       return { text: armedText(s, now, DEFAULT_WINDOW_MS) }
     }
     const window = parseDuration(words[0])
-    if (window == null) return { text: 'keepwarm takes a window such as 6h or 90m, or always, off, status, or guard warn|refuse' }
+    if (window == null) return { text: '/hug-cache takes a window such as 6h or 90m, or always, off, status, or guard warn|refuse' }
     // "every 2m" is a testing knob and lasts only for the window it was given with.
     let every = PING_AFTER_MS
     if (words[1] === 'every') {
@@ -598,8 +614,9 @@ export const register: Register = on => {
     if (typeof e.text !== 'string' || e.text.trimStart().startsWith('/')) return next(e)
     const now = await $.clock.now()
     if (!isCold(s, now) || s.ctx < BIG_TOKENS) return next(e)
+    const limit = await fiveHour($)
     if (s.guard === 'warn') {
-      $.ui.log(`${guardText(s, now)} Sending anyway; keepwarm will hold the cache for ${fmtDuration(AUTO_WARM_MS)} once it lands.`)
+      $.ui.log(`${guardText(s, now, limit)}\nSending anyway; the cache is then hugged for ${fmtDuration(AUTO_WARM_MS)}.`)
       s.coldWritePending = true
       return next(e)
     }
@@ -609,7 +626,7 @@ export const register: Register = on => {
       return next(e)
     }
     s.ackedAt = s.lastRequestAt
-    return { drop: `keepwarm-bg: ${guardText(s, now)} Send it again to pay it, and keepwarm will then hold the cache for ${fmtDuration(AUTO_WARM_MS)}. Or /clear and start from a note.` }
+    return { drop: `${guardText(s, now, limit)}\nSend again to pay it (then hugged ${fmtDuration(AUTO_WARM_MS)}), or /clear and start from a note.` }
   })
 
   on('turn.step', async function* ($, e, next) {
@@ -662,8 +679,8 @@ export const register: Register = on => {
         const usd = price ? rewrote * price[1] / 1e6 : null
         s.misses.push({ at: now, tokens: rewrote, usd })
         if (s.deadline < now + AUTO_WARM_MS) {
-          await startWindow($, s, AUTO_WARM_MS, s.every)
-          $.ui.log(`cold write of ${fmtTokens(rewrote)} tokens paid (${fmtUsd(usd)}). Keeping the cache warm for ${fmtDuration(AUTO_WARM_MS)} so it is not paid again today; /keepwarm off to stop.`)
+          await startWindow($, s, AUTO_WARM_MS, s.every, true)
+          $.ui.log(`cold write of ${fmtTokens(rewrote)} tokens paid (${fmtUsd(usd)}). Keeping the cache warm for ${fmtDuration(AUTO_WARM_MS)} so it is not paid again today; /hug-cache off to stop.`)
         }
       }
     }

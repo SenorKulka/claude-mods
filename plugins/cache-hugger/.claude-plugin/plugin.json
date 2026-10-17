@@ -1,0 +1,9 @@
+{
+  "name": "cache-hugger",
+  "version": "4.0.0",
+  "description": "Keeps the main conversation's one-hour prompt cache warm and prices it when it goes cold. A cache-reading fork 50 idle minutes after the last request, while background work is in flight (for at most 12 hours after the last turn) or a /hug-cache window is open (6h by default, always, or 3h after a paid cold write). A message sent on a cold cache is refused once with its re-write price and the 5-hour limit used. /hug-cache status shows the cache state, context, cold price and this session's cold writes. Nothing goes to the transcript: a row above the prompt counts down, each ping shows in a toast. At session start it also keeps a rule in CLAUDE.md that tells sub-agents to wait in slices of at most 4 minutes. Absorbs cache-tax 2.2.1 (MIT, Karan Bansal); uninstall cache-tax.",
+  "author": {
+    "name": "Bushi"
+  },
+  "license": "MIT"
+}

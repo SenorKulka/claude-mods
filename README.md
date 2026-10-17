@@ -4,30 +4,30 @@ Bushi's home-made Claude Code mods, as a directory marketplace named `bushi-loca
 
 ## Mods
 
-- `keepwarm-bg`: keeps the main conversation's one-hour prompt cache warm and prices it when it goes cold. Since 3.0.0 it does everything cache-tax 2.2.1 did, so uninstall cache-tax (it warns at session start while both are installed). Details below; it also adds a sub-agent wait rule to your `CLAUDE.md`, described after that.
+- `cache-hugger`: keeps the main conversation's one-hour prompt cache warm and prices it when it goes cold. Since 3.0.0 it does everything cache-tax 2.2.1 did, so uninstall cache-tax (it warns at session start while both are installed). Details below; it also adds a sub-agent wait rule to your `CLAUDE.md`, described after that.
 
-## keepwarm-bg: what it does
+## cache-hugger: what it does
 
 **Pings.** A ping is a tool-less fork of the conversation that reads the cache and so renews it, sent 50 idle minutes after the last request, then every 50 minutes. Pings run while either reason holds:
 
 - **Background work:** a turn ended with a shell, subagent, monitor or workflow still in flight. Pings run until a turn leaves no work, for at most 12 hours after the last turn.
-- **A `/keepwarm` window:** `/keepwarm` (6 hours), `/keepwarm 90m`, `/keepwarm always` (a 6-hour window at every session start), `/keepwarm off`. A paid cold write opens a 3-hour window by itself.
+- **A `/hug-cache` window:** `/hug-cache` (6 hours), `/hug-cache 90m`, `/hug-cache always` (a 6-hour window at every session start), `/hug-cache off`. A paid cold write opens a 3-hour window by itself.
 
 Both reasons share one timer, so the cache is never pinged twice. A ping that finds the cache already gone, or fails, stops the pings until the next turn.
 
-**Guard.** A message sent after the cache went cold (over an hour idle, context of 50k tokens or more) is refused once with its re-write price; sending it again pays it. `/keepwarm guard warn` only shows the price.
+**Guard.** A message sent after the cache went cold (over an hour idle, context of 50k tokens or more) is refused once with its re-write price and how much of the 5-hour limit is used; sending it again pays it. `/hug-cache guard warn` only shows the price.
 
 **Prices.** List prices from the [pricing page](https://platform.claude.com/docs/en/about-claude/pricing) on 17 October 2026, per model (Opus 5.5 at $8 per million for a 1-hour write and $0.20 for a read, Haiku 5.5 by prompt length). A turn counts as a cold write only when it wrote more than its context grew by, so a long turn that adds a lot of context is not mistaken for one.
 
-**Where it shows.** Nothing goes to the transcript except the cold-write line. A row above the prompt (the status line where there is no such row) shows warm or cold, the time left, the next ping as a countdown redrawn every minute, and the last ping's read and price. Each ping shows in a toast, and pings stopping early in a longer toast. `/keepwarm status` shows the model, cache state, context, cold price, break-even, background work and this session's cold writes.
+**Where it shows.** Nothing goes to the transcript except the cold-write line. A row above the prompt (the status line where there is no such row) shows warm or cold, the time left and why (`manual` for `/hug-cache`, `auto bg` for background work, `auto` for always or after a cold write), the next ping as a countdown redrawn every minute, and the last ping's read and price. Each ping shows in a toast, and pings stopping early in a longer toast. `/hug-cache status` shows the model, cache state, context, cold price, break-even, background work and this session's cold writes.
 
 Windows are kept per session in the mod's own store. Windows armed under cache-tax are not carried over.
 
-## keepwarm-bg: the sub-agent wait rule in CLAUDE.md
+## cache-hugger: the sub-agent wait rule in CLAUDE.md
 
 The mod's pings only reach the main conversation: a mod can fork the main thread (`$.model.fork`), never a sub-agent's. A sub-agent's prompt cache lasts 5 minutes, so a sub-agent that waits longer than that on a background job re-writes its whole cache when it wakes. The workable fix is for sub-agents to wake themselves: each short wake-up reads the cache and so refreshes it.
 
-So at every session start the mod keeps this section in `~/.claude/CLAUDE.md` (`$CLAUDE_CONFIG_DIR/CLAUDE.md` when that is set), between `<!-- KEEPWARM_BG_WAIT_RULE_START -->` and `<!-- KEEPWARM_BG_WAIT_RULE_END -->`:
+So at every session start the mod keeps this section in `~/.claude/CLAUDE.md` (`$CLAUDE_CONFIG_DIR/CLAUDE.md` when that is set), between `<!-- KEEPWARM_BG_WAIT_RULE_START -->` (the markers keep their old name so existing blocks update in place) and `<!-- KEEPWARM_BG_WAIT_RULE_END -->`:
 
 > **Waiting in sub-agents (4-minute slices).** A sub-agent that waits on a background job (a review trial, a check run, a test suite, a build, a server) waits in slices of at most 4 minutes: a Bash or Monitor wait with a timeout of at most 240 s, then a short status check, then the next slice; never one long blocking wait. A session that launches sub-agents puts the rule in every prompt for one that may wait on a background job. Waits in the main conversation are exempt: its cache lasts an hour.
 
@@ -91,7 +91,7 @@ Clone into `~/.claude/local-marketplace`, then in Claude Code:
 
 ```
 /plugin marketplace add ~/.claude/local-marketplace
-/plugin install keepwarm-bg@bushi-local
+/plugin install cache-hugger@bushi-local
 ```
 
 The marketplace is read in place, so after a `git pull` run `/reload-plugins` or start a new session.

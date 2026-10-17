@@ -42,7 +42,7 @@ test('session start writes the rule into CLAUDE.md under the config dir', async 
   on('fs.read', ($, e) => ({ value: files[e.path] }))
   on('fs.write', ($, e) => { files[e.path] = e.text; return { value: undefined } })
   on('session.start', ($, e) => ({ cwd: e.cwd }))
-  // The rest of session start: the window store, the session and the /keepwarm command.
+  // The rest of session start: the window store, the session and the /hug-cache command.
   mock.store(on, {})
   on('session.id', () => ({ value: 'S1' }))
   on('session.usage', () => ({ value: { startedAt: 0, context: { window: 1000000, tokens: undefined }, rateLimits: [] } }))

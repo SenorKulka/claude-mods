@@ -5,9 +5,9 @@
   },
   "plugins": [
     {
-      "name": "keepwarm-bg",
-      "source": "./plugins/keepwarm-bg",
-      "description": "Keeps the prompt cache warm while background work runs or a /keepwarm window is open, and prices cold writes (absorbs cache-tax)"
+      "name": "cache-hugger",
+      "source": "./plugins/cache-hugger",
+      "description": "Hugs the prompt cache to keep it warm while background work runs or a /hug-cache window is open, and prices cold writes (absorbs cache-tax)"
     }
   ]
 }

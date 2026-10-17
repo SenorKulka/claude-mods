@@ -16,7 +16,7 @@ const done = (): TurnCompleteInput => ({
   usage: { input_tokens: 2, output_tokens: 10, cache_read_input_tokens: 200000, cache_creation_input_tokens: 500, model: 'claude-fable-5-1' },
 })
 const run = (args: string): CommandRunInput => ({
-  command: 'keepwarm', args, origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 80 },
+  command: 'hug-cache', args, origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 80 },
 })
 
 // One main turn ending: Stop reports the in-flight work, then the turn completes.
@@ -112,7 +112,7 @@ test('stops pinging 12 hours after the last turn, with a toast, until a turn lea
   await clock.advance(CAP_MS + 3 * HOUR)
   expect(forks.length).toBe(Math.floor(CAP_MS / PING_AFTER_MS))
   expect(toasts.at(-1)).toMatch(/^Pings stopped at \d\d:\d\d: 12 h cap after the last turn/)
-  expect(status.at(-1)).toMatch(/^keepwarm stopped: 12 h cap/)
+  expect(status.at(-1)).toMatch(/^pings stopped: 12 h cap/)
   await end($, [shell])
   await clock.advance(PING_AFTER_MS)
   expect(forks.length).toBe(Math.floor(CAP_MS / PING_AFTER_MS) + 1)
@@ -125,7 +125,7 @@ test('a ping that finds the cache gone stops until the next turn', async ($, on)
   expect(forks.length).toBe(1)
   expect(logs).toEqual([])
   expect(toasts).toEqual([expect.stringContaining('the cache was already gone')])
-  expect(status.at(-1)).toMatch(/^keepwarm stopped: the ping read 0 and wrote 200k/)
+  expect(status.at(-1)).toMatch(/^pings stopped: the ping read 0 and wrote 200k/)
   await end($, [shell])
   await clock.advance(PING_AFTER_MS)
   expect(forks.length).toBe(2)
@@ -150,10 +150,10 @@ test('a /keepwarm window and background work share one timer', async ($, on) => 
   await clock.advance(PING_AFTER_MS)
   expect(forks.length).toBe(2)
   // The cap outlasts the window, so the row names background work as the reason.
-  expect(status.at(-1)).toMatch(/^keepwarm 10h20m left for background work · ping in 50m/)
+  expect(status.at(-1)).toMatch(/^cache hugging 10h20m left \(auto bg\) · ping in 50m/)
   await end($, [])
   await clock.advance(10 * MIN)
-  expect(status.at(-1)).toMatch(/^keepwarm 10m left · ping in 40m/)
+  expect(status.at(-1)).toMatch(/^cache hugging 10m left \(\w+\) · ping in 40m/)
   await clock.advance(3 * HOUR)
   expect(forks.length).toBe(2)
 })
@@ -185,13 +185,13 @@ test('/clear and compaction cancel the pending ping', async ($, on) => {
 test('the countdown ticks between events and each refresh shows its cost, never in the transcript', async ($, on) => {
   const { clock, logs, status, toasts } = world(on)
   await end($, [shell])
-  expect(status.at(-1)).toBe('keepwarm 12h00m left for background work · ping in 50m')
+  expect(status.at(-1)).toBe('cache hugging 12h00m left (auto bg) · ping in 50m')
   await clock.advance(10 * MIN)
-  expect(status.at(-1)).toBe('keepwarm 11h50m left for background work · ping in 40m')
+  expect(status.at(-1)).toBe('cache hugging 11h50m left (auto bg) · ping in 40m')
   await clock.advance(40 * MIN)
   // Fable 5.1: 200k read at $0.25, 2 input at $10, 1 output at $50.
   expect(toasts).toEqual(['Cache refreshed: the ping read 200k tokens ($0.05).'])
-  expect(status.at(-1)).toBe('keepwarm 11h10m left for background work · ping in 50m · last ping read 200k $0.05')
+  expect(status.at(-1)).toBe('cache hugging 11h10m left (auto bg) · ping in 50m · last ping read 200k $0.05')
   await end($, [])
   expect(status.at(-1)).toBeUndefined()
   await clock.advance(10 * MIN)
