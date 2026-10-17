@@ -10,11 +10,68 @@ import type { EngineInterface, Register, Timer } from 'claude-code'
 // written to the transcript: the countdown and the last ping show in a row above
 // the prompt (the status line where there is no such row), each ping in a toast,
 // and pings stopping while work may still be in flight in a notification.
+//
+// A mod can't ping a subagent's cache (`$.model.fork` forks the main thread
+// only), and a subagent's cache lasts five minutes. So at session start the mod
+// also keeps a rule in the user's CLAUDE.md that tells subagents to wait in
+// slices of at most four minutes; each wake-up then refreshes their cache.
 
 export const PING_AFTER_MS = 50 * 60 * 1000
 /** Pings stop this long after the last turn ended, in case a job hangs. */
 export const CAP_MS = 12 * 60 * 60 * 1000
 export const PING_PROMPT = 'Reply with the single word: warm'
+
+export const RULE_START = '<!-- KEEPWARM_BG_WAIT_RULE_START -->'
+export const RULE_END = '<!-- KEEPWARM_BG_WAIT_RULE_END -->'
+/** Anywhere in CLAUDE.md, keeps the mod from adding or updating the rule. */
+export const RULE_OFF = '<!-- KEEPWARM_BG_WAIT_RULE: off -->'
+const RULE_HEADING = '## Waiting in sub-agents (4-minute slices)'
+export const WAIT_RULE = `${RULE_START}
+${RULE_HEADING}
+
+A sub-agent's prompt cache lasts 5 minutes; one idle tool call longer than that makes it rewrite its whole cache when it wakes (measured 17 Oct 2026: 600–700k-token caches rewritten 16 times in one session; see the keepwarm-bg README). So:
+
+- **If you are a sub-agent** and wait on a background job (a review trial, a check run, a test suite, a build, a server), wait in slices of at most 4 minutes: a Bash or Monitor wait with a timeout of at most 240 s, then a short status check, then the next slice. Never make one long blocking wait.
+- **If you launch sub-agents** (Agent tool, workflows), put this rule in every prompt for one that may wait on a background job.
+- Waits in the main conversation are exempt: its cache lasts an hour.
+${RULE_END}`
+
+/**
+ * CLAUDE.md's text with the wait rule in it, or null when it needs no change:
+ * the marked block is replaced when it differs, an unmarked section under the
+ * rule's heading (added by hand) is taken over, and otherwise the rule is
+ * appended. RULE_OFF anywhere leaves the file alone.
+ */
+export function withWaitRule(text: string): string | null {
+  if (text.includes(RULE_OFF)) return null
+  const start = text.indexOf(RULE_START)
+  const end = text.indexOf(RULE_END, start)
+  if (start >= 0 && end > start) {
+    const next = text.slice(0, start) + WAIT_RULE + text.slice(end + RULE_END.length)
+    return next === text ? null : next
+  }
+  const heading = text.search(/^## Waiting in sub-agents \(4-minute slices\)[ \t]*$/m)
+  if (heading >= 0) {
+    const rest = text.slice(heading + RULE_HEADING.length)
+    const after = rest.search(/^(## |<!-- )/m)
+    const tail = after < 0 ? '\n' : '\n\n' + rest.slice(after)
+    return text.slice(0, heading) + WAIT_RULE + tail
+  }
+  const body = text.trimEnd()
+  return (body ? body + '\n\n' : '') + WAIT_RULE + '\n'
+}
+
+async function ensureWaitRule($: EngineInterface) {
+  try {
+    const config = (await $.env.get('CLAUDE_CONFIG_DIR')) ?? `${await $.env.get('HOME')}/.claude`
+    const path = `${config}/CLAUDE.md`
+    const text = (await $.fs.exists(path)) ? await $.fs.read(path) : ''
+    const next = withWaitRule(text)
+    if (next !== null) await $.fs.write(path, next)
+  } catch (err) {
+    $.ui.log(`keepwarm-bg: could not update CLAUDE.md with the sub-agent wait rule: ${err instanceof Error ? err.message : String(err)}`, { to: 'debug' })
+  }
+}
 
 type Summary = { id: string; type: string; status: string }
 type Usage = { cache_read_input_tokens: number; cache_creation_input_tokens: number }
@@ -192,6 +249,7 @@ export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     const r = await next(e)
     s.hasBand = e.surface === 'terminal' || e.surface === 'desktop'
+    await ensureWaitRule($)
     return r
   })
 

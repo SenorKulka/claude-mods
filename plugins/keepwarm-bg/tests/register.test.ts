@@ -56,6 +56,8 @@ function world(on: On, answers: ForkAnswer[] = []) {
   on('session.id', () => ({ value: 'S1' }))
   on('fs.list', ($, e) => ({ value: e.path === STORE_DIR ? [{ name: STORE_FILE, kind: 'file' as const, size: 1, mtimeMs: 0, isLink: false }] : [] }))
   on('fs.read', () => ({ value: JSON.stringify(store) }))
+  on('fs.exists', () => ({ value: false }))
+  on('fs.write', () => ({ value: undefined }))
   on('classic.Stop', () => ({}))
   on('turn.complete', ($, e) => ({ text: e.answer }))
   on('session.compact', ($, e) => ({ messages: e.messages }))
