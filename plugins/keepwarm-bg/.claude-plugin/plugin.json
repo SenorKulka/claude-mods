@@ -1,7 +1,7 @@
 {
   "name": "keepwarm-bg",
-  "version": "2.0.0",
-  "description": "A mod that keeps the prompt cache warm while the session waits on background work (shells, subagents, monitors, workflows): 50 idle minutes after a turn that leaves work in flight it sends one cache-reading fork, every 50 minutes, for at most 12 hours after the last turn. It runs no slash commands and leaves nothing in the transcript. It stays out of the way of a cache-tax /keepwarm window.",
+  "version": "2.1.0",
+  "description": "A mod that keeps the prompt cache warm while the session waits on background work (shells, subagents, monitors, workflows): 50 idle minutes after a turn that leaves work in flight it sends one cache-reading fork, every 50 minutes, for at most 12 hours after the last turn. It runs no slash commands and leaves nothing in the transcript: the countdown and the last ping show in a row above the prompt, each ping in a toast, and pings stopping early in a notification. It stays out of the way of a cache-tax /keepwarm window.",
   "author": {
     "name": "Bushi"
   },

@@ -1,7 +1,7 @@
 import { expect, mock, test, tier, type ClassicFields, type Engine } from 'claude-code/testing'
 import type { ModelForkResult, On, TurnCompleteInput } from 'claude-code'
 
-import { CAP_MS, isWarm, PING_AFTER_MS, PING_PROMPT } from '../hooks/register'
+import { CAP_MS, clockTime, fmtTokens, isWarm, PING_AFTER_MS, PING_PROMPT } from '../hooks/register'
 
 tier('user')
 
@@ -36,6 +36,10 @@ function world(on: On, answers: ForkAnswer[] = []) {
   const forks: string[] = []
   const logs: string[] = []
   const commands: string[] = []
+  const status: (string | undefined)[] = []
+  const toasts: string[] = []
+  const notes: string[] = []
+  let invalidations = 0
   on('model.fork', ($, e) => {
     forks.push(e.prompt)
     const a = answers.shift() ?? warm
@@ -44,6 +48,10 @@ function world(on: On, answers: ForkAnswer[] = []) {
   })
   on('command.run', ($, e) => { commands.push(`${e.command} ${e.args}`); return { text: '' } })
   on('ui.log', ($, e) => { logs.push(e.text); return { value: undefined } })
+  on('ui.status', ($, e) => { status.push(e.text); return { value: undefined } })
+  on('ui.toast', ($, e) => { toasts.push(e.text); return { value: undefined } })
+  on('ui.notify', ($, e) => { notes.push(e.text); return { value: { isSent: false as const, reason: 'no-surface' as const } } })
+  on('ui.invalidate', () => { invalidations++; return { value: undefined } })
   on('env.get', ($, e) => ({ value: e.name === 'HOME' ? '/home/u' : undefined }))
   on('session.id', () => ({ value: 'S1' }))
   on('fs.list', ($, e) => ({ value: e.path === STORE_DIR ? [{ name: STORE_FILE, kind: 'file' as const, size: 1, mtimeMs: 0, isLink: false }] : [] }))
@@ -52,7 +60,7 @@ function world(on: On, answers: ForkAnswer[] = []) {
   on('turn.complete', ($, e) => ({ text: e.answer }))
   on('session.compact', ($, e) => ({ messages: e.messages }))
   on('classic.SessionStart', () => ({}))
-  return { clock, store, forks, logs, commands }
+  return { clock, store, forks, logs, commands, status, toasts, notes, invalidations: () => invalidations }
 }
 
 test('pings 50 idle minutes after a turn that leaves a background shell, then every 50', async ($, on) => {
@@ -107,11 +115,14 @@ test('stops pinging 12 hours after the last turn', async ($, on) => {
 })
 
 test('a ping that finds the cache gone stops until the next turn', async ($, on) => {
-  const { clock, forks, logs } = world(on, [{ read: 0, write: 200000 }])
+  const { clock, forks, logs, notes, toasts, status } = world(on, [{ read: 0, write: 200000 }])
   await end($, [shell])
   await clock.advance(3 * HOUR)
   expect(forks.length).toBe(1)
-  expect(logs).toEqual([expect.stringContaining('cache was already gone')])
+  expect(logs).toEqual([])
+  expect(notes).toEqual([expect.stringContaining('cache was already gone')])
+  expect(toasts).toEqual([notes[0]])
+  expect(status.at(-1)).toContain('pings stopped at')
   await end($, [shell])
   await clock.advance(PING_AFTER_MS)
   expect(forks.length).toBe(2)
@@ -119,11 +130,12 @@ test('a ping that finds the cache gone stops until the next turn', async ($, on)
 
 test('a ping that gets no reply stops until the next turn', async ($, on) => {
   const failed = { isAnswered: false, reason: 'api-error', status: 529, error: 'overloaded', usage: null } as unknown as ModelForkResult
-  const { clock, forks, logs } = world(on, [failed])
+  const { clock, forks, logs, notes } = world(on, [failed])
   await end($, [shell])
   await clock.advance(3 * HOUR)
   expect(forks.length).toBe(1)
-  expect(logs).toEqual([expect.stringContaining('api-error')])
+  expect(logs).toEqual([])
+  expect(notes).toEqual([expect.stringContaining('api-error')])
 })
 
 test('leaves the pinging to a cache-tax window armed for this session', async ($, on) => {
@@ -159,6 +171,37 @@ test('/clear and compaction cancel the pending ping', async ($, on) => {
   await $.session.compact({ trigger: 'manual', messages: [{ role: 'user', text: 'summary', toolUses: [] }] })
   await clock.advance(2 * HOUR)
   expect(forks).toEqual([])
+})
+
+test('shows the countdown and each refresh, never in the transcript', async ($, on) => {
+  const { clock, logs, status, toasts, notes } = world(on)
+  await end($, [shell])
+  const start = 10 * HOUR
+  expect(status).toEqual([`keepwarm-bg · waiting on background work · cache ping at ${clockTime(start + PING_AFTER_MS)}`])
+  await clock.advance(PING_AFTER_MS)
+  expect(toasts).toEqual([`Cache refreshed: the ping read ${fmtTokens(200000)} tokens.`])
+  expect(status.at(-1)).toBe(`keepwarm-bg · cache refreshed at ${clockTime(start + PING_AFTER_MS)} (read 200k) · next ping at ${clockTime(start + 2 * PING_AFTER_MS)}`)
+  await end($, [])
+  expect(status.at(-1)).toBeUndefined()
+  expect(logs).toEqual([])
+  expect(notes).toEqual([])
+})
+
+test('notifies once when the 12-hour cap ends the pings', async ($, on) => {
+  const { clock, notes, status } = world(on)
+  await end($, [shell])
+  await clock.advance(CAP_MS + HOUR)
+  expect(notes).toEqual([expect.stringContaining('that was the last ping (read 200k), 12 h after the last turn')])
+  expect(status.at(-1)).toContain('pings stopped at')
+})
+
+test('on a surface with a row above the prompt, redraws it instead of the status line', async ($, on) => {
+  const { status, invalidations } = world(on)
+  on('session.start', ($, e) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: '/w', surface: 'desktop', isInteractive: true })
+  await end($, [shell])
+  expect(status).toEqual([])
+  expect(invalidations()).toBeGreaterThan(0)
 })
 
 test('tells a warm ping from a cold one', () => {
