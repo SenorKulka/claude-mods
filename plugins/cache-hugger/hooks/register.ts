@@ -290,7 +290,7 @@ function statusText(s: State, now: number): string | undefined {
     : s.compacted ? ' · waiting for the first turn after compaction'
     : isCold(s, now) ? ` · cold now, first ping ${fmtDuration(s.every)} after the next turn`
     : ` · ping in ${fmtDuration(s.lastRequestAt + s.every - now)}`
-  return `cache hugging ${fmtDuration(end - now)} left (${why})${nextText}${pingText}`
+  return `${fmtDuration(end - now)} left (${why})${nextText}${pingText}`
 }
 
 function updateStatus($: EngineInterface, s: State, now: number) {
@@ -452,7 +452,7 @@ function card(s: State, now: number): string {
   lines.push(`cold cost   ${fmtUsd(coldUsd(s))} to re-write it (warm turn ${fmtUsd(warmUsd(s))})`)
   const always = s.always ? ' (always)' : ''
   const idle = s.always ? 'off until the next session start, which arms 6h00m (always)' : 'off (/hug-cache to arm it for 6h00m)'
-  lines.push(`hugging     ${endOf(s) ? (statusText(s, now) ?? '').replace(/^cache hugging /, 'on, ') + always : s.stopped ? `stopped, ${s.stopped}${always}` : idle}`)
+  lines.push(`hugging     ${endOf(s) ? 'on, ' + (statusText(s, now) ?? '') + always : s.stopped ? `stopped, ${s.stopped}${always}` : idle}`)
   lines.push(`background  ${s.bgUntil ? `work in flight, pings until ${clockTime(s.bgUntil)} at the latest` : 'no work in flight at the last turn'}`)
   const pings = breakEvenPings(s)
   if (pings != null) lines.push(`break-even  up to ${pings} pings at the read rate cost one cold write, about ${fmtDuration(pings * s.every)} of idle at one ping per ${fmtDuration(s.every)}`)
